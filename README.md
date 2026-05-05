@@ -4,7 +4,7 @@
 >
 > Ce dépôt est un fork de [github.com/GeorgeVasile04/llm_lie_detection_black_vs_white_box](https://github.com/GeorgeVasile04/llm_lie_detection_black_vs_white_box).
 >
-> - **Auteur du fork :** Imad Daniels (ULB MA2)
+> - **Auteur du fork :** Imad (ULB MA2)
 > - **Objectif :** correction du bug de shuffle déterministe dans `White_Box_Lie_Detection/repeng/datasets/elk/dlk.py` qui produisait des sous-échantillons mono-classe sur les datasets DLK > 20 000 lignes (notamment IMDB et amazon_polarity, dont les rows sont pré-triées par classe sur HuggingFace). Voir le commit `fix(dlk)` et le script `Black_vs_White_Lie_Detection/Data_Efficiency_BB_WB/diagnose_imdb_bias.py` pour les chiffres avant/après.
 > - Le dépôt amont original reste référencé en remote `upstream` pour pouvoir tirer ses futures mises à jour si besoin.
 
