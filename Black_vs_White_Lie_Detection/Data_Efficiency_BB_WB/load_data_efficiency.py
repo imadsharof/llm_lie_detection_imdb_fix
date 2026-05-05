@@ -56,23 +56,39 @@ def load_dataset_efficiency(dataset_name="commonsense_qa", split='train', random
 
     # Enforce strictly 1 True and 1 False per question
     np.random.seed(random_seed)
-    
-    grouped = df.groupby('id')
+
+    # Bug fix: pandas `groupby('id')` defaults to `sort=True`, which re-orders
+    # groups alphabetically by their string id. Since `id = str(row_idx)` and
+    # IMDB rows are pre-sorted by class on HF (rows 0..12499 = neg, 12500..
+    # 24999 = pos), the lexicographic order puts all class-0 row_idx values
+    # first ("0", "1", "10", "100", "1000", "10000".."12499", "13",...). The
+    # downstream notebook does `df_raw.iloc[:N]` to build train/val splits, so
+    # for any small N both train and val end up almost mono-class, killing the
+    # probe AUC (~0.60 plateau). To fix this we shuffle `df` rows with a
+    # seeded RNG before groupby and tell groupby NOT to re-sort, so that
+    # `iloc[:N]` slices a representative class-balanced sample. Combined with
+    # the sha256 shuffle in dlk.py (DLK_SHUFFLE_SEED), the source-class
+    # distribution of the first N rows of the returned df is now ~50/50.
+    rng = np.random.default_rng(random_seed)
+    perm = rng.permutation(len(df))
+    df = df.iloc[perm].reset_index(drop=True)
+
+    grouped = df.groupby('id', sort=False)
     balanced_samples = []
-    
+
     for group_id, group_df in grouped:
         true_samples = group_df[group_df['label'] == 1]
         false_samples = group_df[group_df['label'] == 0]
-        
+
         if len(true_samples) > 0 and len(false_samples) > 0:
             chosen_true = true_samples.sample(n=1, random_state=random_seed)
             chosen_false = false_samples.sample(n=1, random_state=random_seed)
             balanced_samples.append(chosen_true)
             balanced_samples.append(chosen_false)
-            
+
     if len(balanced_samples) == 0:
         return pd.DataFrame()
-        
+
     df_balanced = pd.concat(balanced_samples).reset_index(drop=True)
     return df_balanced
 
