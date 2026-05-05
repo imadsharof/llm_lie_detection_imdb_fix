@@ -4,8 +4,21 @@ from typing import Any
 from datasets import load_dataset
 
 from White_Box_Lie_Detection.repeng.datasets.elk.types import BinaryRow, DlkDatasetId, Split
-from White_Box_Lie_Detection.repeng.datasets.utils.shuffles import deterministic_shuffle
+from White_Box_Lie_Detection.repeng.datasets.utils.shuffles import (
+    deterministic_shuffle,
+    deterministic_shuffle_sort_fn,
+)
 from White_Box_Lie_Detection.repeng.datasets.utils.splits import split_train
+
+# Graine utilisée pour le sous-échantillonnage déterministe des datasets DLK
+# de plus de 20 000 lignes. Préfixée à `str(i)` avant le hash sha256, ce qui
+# rend l'ordre reproductible ET facile à varier (utile pour une éventuelle
+# validation multi-seed). Avant le fix, le chemin "optimisé" triait `str(i)`
+# en clair (ordre lexicographique pur), ce qui produisait des sous-échantillons
+# presque mono-classe sur IMDB / amazon_polarity (rows triées par classe à la
+# source) et écrasait l'AUC du probe pour les petits N.
+DLK_SHUFFLE_SEED = 42
+
 
 @dataclass
 class _DatasetSpec:
@@ -80,36 +93,29 @@ def _get_dlk_dataset(
     ds_split = dataset[hf_split]
     
     items_to_process = []
-    
-    # Optimization: Replicate the EXACT original logic (lexicographical sort of indices)
-    # without loading the full dataset content.
+
+    # Optimization for large datasets: replicate `deterministic_shuffle` (sha256 of
+    # str(index)) on indices alone, without materialising the full dataset content.
+    # Bug fix: the previous version sorted by `str(i)` directly (plain lexicographic
+    # order), which is NOT a shuffle — it produced a heavily biased ordering. On
+    # IMDB/amazon_polarity (rows pre-sorted by class on HF), this caused the first
+    # N picked rows to be drastically class-imbalanced for small N (e.g. IMDB
+    # N <= 2000 → 100% label=0), poisoning probe training with a spurious
+    # template-token shortcut.
     if len(ds_split) > 20000:
-        # 1. Generate all indices
         all_indices = range(len(ds_split))
-        # 2. Sort indices by their string representation (mimicking deterministic_shuffle)
-        # This gives us the exact indices the original code would have picked.
-        # Sorting 3.6M integers-as-strings takes ~1-2 seconds, which is fine.
-        sorted_indices = sorted(all_indices, key=lambda i: str(i))
-        # 3. Take the top 'limit' indices
+        sorted_indices = sorted(
+            all_indices,
+            key=lambda i: deterministic_shuffle_sort_fn(
+                f"{DLK_SHUFFLE_SEED}-{i}", None
+            ),
+        )
         target_indices = sorted_indices[:limit]
-        # 4. Select only these rows from the dataset
         ds_trimmed = ds_split.select(target_indices)
-        # 5. Enumerate. Note: The rows are now in the "sorted" order, so validation matches.
-        # We need to yield (original_index, row) or (new_index, row)?
-        # deterministic_shuffle yields (index, row).
-        # The original code's 'row_idx' comes from enumerate(dataset).
-        # So we need to pass the ORIGINAL index to the loop for consistency?
-        # The loop uses row_idx for:
-        #   - split_train(..., row_id=str(row_idx))
-        #   - group_id=str(row_idx)
-        #   - rotating false labels: false_label = false_label_options[row_idx % len...]
-        
-        # So yes, we must preserve the original index.
-        # ds_trimmed doesn't keep original indices.
-        # So we construct the iterator manually.
+        # Preserve the ORIGINAL row index so that downstream `group_id`,
+        # `split_train(row_id=...)` and false-label rotation stay consistent.
         items_to_process = zip(target_indices, ds_trimmed)
     else:
-        # Original logic for small datasets (unchanged)
         iterable = enumerate(ds_split)
         items_to_process = deterministic_shuffle(
             iterable, lambda row: str(row[0])
